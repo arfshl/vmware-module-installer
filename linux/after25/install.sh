@@ -1,50 +1,46 @@
-#!/bin/sh
+#!/bin/bash
 set -euo
 
-version=$(vmware-installer -l | awk '$1=="vmware-workstation" {
-    split($2,a,".")
-    print a[1], a[2], a[3]
-}')
+version_raw=$(vmware-installer -l | awk '$1=="vmware-workstation" {print $2}')
 
-set -- $version
-major=$1
-patch=${3:-0}
-
-check_branch() {
-    branch="$1"
-
-    if curl -fsI "https://github.com/philipl/vmware-host-modules/archive/refs/heads/${branch}.zip" >/dev/null; then
-        FOUND_BRANCH="$branch"
-        return 0
-    fi
-
-    return 1
-}
-
-FOUND_BRANCH=""
-
-# Try branch for specific version (25h2u1=25.0.1)
-if [ "$patch" -gt 0 ]; then
-    for h in 1 2 3 4 5; do
-        check_branch "workstation-${major}h${h}u${patch}" && break
-    done
-fi
-
-# If not found then fallback to only to base version (25h2=25.0.0)
-if [ -z "$FOUND_BRANCH" ]; then
-    for h in 1 2 3 4 5; do
-        check_branch "workstation-${major}h${h}" && break
-    done
-fi
-
-if [ -z "$FOUND_BRANCH" ]; then
-    echo "No compatible branch found."
+if [ -z "$version_raw" ]; then
+    echo "VMware Workstation not found via vmware-installer."
     exit 1
 fi
 
-echo "Using $FOUND_BRANCH"
+major=$(echo "$version_raw" | cut -d'.' -f1)
 
-curl -LO "https://github.com/philipl/vmware-host-modules/archive/refs/heads/${FOUND_BRANCH}.zip"
+FOUND_BRANCH=""
+
+# Retry loop for h1, h2, h3
+for h in 1 2 3; do
+    branch="workstation-${major}h${h}"
+    url="https://github.com/philipL/vmware-host-modules/archive/refs/heads/${branch}.zip"
+    
+    echo "Checking branch: $branch..."
+
+    # Download to a temporary zip file following redirects (-L), silent (-s), fail on server errors (-f)
+    if curl -sLf -o "${branch}.zip" "$url"; then
+        # Ensure the file is actually a valid zip (size > 1000 bytes, avoiding tiny html error pages)
+        if [ -s "${branch}.zip" ] && [ "$(wc -c < "${branch}.zip")" -gt 1000 ]; then
+            FOUND_BRANCH="$branch"
+            echo "Found valid branch: $FOUND_BRANCH"
+            break
+        fi
+    fi
+    
+    # Clean up invalid attempt if it exists
+    rm -f "${branch}.zip"
+done
+
+if [ -z "$FOUND_BRANCH" ]; then
+    echo "Error: No compatible branch (h1, h2, h3) found on GitHub for major version $major."
+    exit 1
+fi
+
+echo "Using branch: $FOUND_BRANCH"
+
+# The zip is already downloaded as ${FOUND_BRANCH}.zip during the check!
 unzip "${FOUND_BRANCH}.zip"
 cd "vmware-host-modules-${FOUND_BRANCH}"
 
